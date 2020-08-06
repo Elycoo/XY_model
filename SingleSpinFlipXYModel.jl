@@ -103,7 +103,8 @@ function IsingData(sim_data::SimData,start::Bool)
         IsingData(
             sim_data,
             0. * ones(ntuple(k->sim_data.L,NDIMS )),
-            -sim_data.L^NDIMS,  # initial energy
+            -NDIMS*sim_data.L^NDIMS,
+            # initial energy (-1)*Nz/2 if triangular lattice z is more then 2*NDIMS
             MeasureData(sim_data)
         )
     else  # hot start
@@ -151,7 +152,7 @@ function next_step!(ising_data::IsingData)
     # flip site
     flip_site=rand(CartesianIndices(ising_lat))
     # calculate ratio
-    α = pi
+    α = pi/2
     suggested_dθ = 2*α*(rand()-0.5)
     delta_E=calc_delta_E(ising_lat,flip_site, suggested_dθ)
     ratio=exp(J*delta_E)
@@ -226,11 +227,11 @@ using Random
 # Random.seed!(12463)
 gr()
 Ts = range(0.5, length=10,stop=1.5)
-Ts = [0.6, 0.9, 1.0, 1.05, 1.1, 1.15,1.2,1.4]
+Ts = [0.2,0.6, 0.9, 1.0, 1.05, 1.1, 1.15,1.2,1.4,2,4]
 betas= 1 ./Ts
 # betas=range(0.01, length=2,stop=0.5)
 # Ls=[5,10,20]
-Ls=[40]
+Ls=[20]
 num_measure=2^16
 num_thermal=1000
 start_cold = true
@@ -249,22 +250,30 @@ for L in Ls
     for b in betas
         sim_data=SingleSpinFlip.SimData(b,L,num_measure,num_thermal)
         global res=SingleSpinFlip.run_mcmc(sim_data,start_cold)    # start with all spins at the same direction
-        #res=SingleSpinFlip.run_mcmc(sim_data,!start_cold)  # start with all spins  in random  direction
+        # global res=SingleSpinFlip.run_mcmc(sim_data,!start_cold)  # start with all spins  in random  direction
+
+        # ENERGY
         push!(ens,mean(res.measure_data.energy))
         stds=SingleSpinFlip.bin_bootstrap_analysis(res.measure_data.energy)
         push!(ens_std,stds[end])
+
+        # HEAT CAPACITY
         push!(heat_c, (mean(res.measure_data.energy.^2) - mean(res.measure_data.energy)^2)*b^2)
+
+        # MAGNETIZATION
         mag = mean(res.measure_data.mag, dims=1)
         push!(mags, sqrt(mag[1]^2+mag[2]^2))
         stds=SingleSpinFlip.bin_bootstrap_analysis(res.measure_data.mag)
         push!(mags_std,stds[end])
+
+        # CORRELATION TIME
         tau=0.5*((stds[end]/stds[1])^2-1)
         push!(taus,tau)
     end
     plot!(fig_en,betas,ens,yerr =ens_std,xlabel=L"\beta",ylabel=L"E",label="mc L=$L",legend=:bottomright)
     # plot!(fig_en,betas,[exact_energy(b,L) for b in betas],label="exact L=$L",legend=:bottomright)
     # plot!(fig_en,betas,[exact_energy(b,L) for b in betas],label="exact L=$L",legend=:topleft)
-    plot!(fig_heat_c,1 ./ betas,heat_c,xlabel=L"k_{B}T/J",ylabel=L"C_{V}",label="mc L=$L",legend=:topright)
+    plot!(fig_heat_c,1 ./ betas,L^SingleSpinFlip.NDIMS*heat_c,xlabel=L"k_{B}T/J",ylabel=L"C_{V}",label="mc L=$L",legend=:topright)
     # plot!(fig_mag,betas,mags,yerr =mags_std,xlabel=L"\beta",ylabel=L"m",label="L=$L",legend=:topleft)
     plot!(fig_mag,1 ./ betas,mags,yerr=mags_std,xlabel=L"k_{B}T/J",ylabel=L"m",label="L=$L",legend=:topleft)
     plot!(fig_tau,betas,taus,label="L=$L",xlabel=L"\beta",ylabel=L"\tau",legend=:topleft)
@@ -284,8 +293,8 @@ display(fig)
 # end
 # @show ee
 #
-# sim_data = SingleSpinFlip.SimData(0.01,5,1000,64000)
-# ising_data = SingleSpinFlip.IsingData(sim_data, true)
+sim_data = SingleSpinFlip.SimData(0.01,5,1000,64000)
+ising_data = SingleSpinFlip.IsingData(sim_data, true)
 # ising_data.ising_lat = v
 # ee = SingleSpinFlip.lat_energy(ising_data)
 #  @show ee
