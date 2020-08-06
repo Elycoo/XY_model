@@ -288,4 +288,4 @@ display(fig)
 # ising_data = SingleSpinFlip.IsingData(sim_data, true)
 # ising_data.ising_lat = v
 # ee = SingleSpinFlip.lat_energy(ising_data)
-# @show ee
+#  @show ee
