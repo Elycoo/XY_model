@@ -184,6 +184,9 @@ function make_measurement!(ising_data::IsingData,i)
     # magnetization vector
     mag_vec = [sum(cos.(ising_data.ising_lat)), sum(sin.(ising_data.ising_lat))]
     ising_data.measure_data.mag[i,:]=mag_vec/lat_size
+    # magnetization vector squre
+    mag_squre = sum(cos.(ising_data.ising_lat))^2 + sum(sin.(ising_data.ising_lat))^2
+    ising_data.measure_data.mag[i,1]=mag_squre/lat_size^2
     # energy density
     ising_data.measure_data.energy[i]=ising_data.total_energy/lat_size
 end
@@ -262,7 +265,11 @@ for L in Ls
 
         # MAGNETIZATION
         mag = mean(res.measure_data.mag, dims=1)
-        push!(mags, sqrt(mag[1]^2+mag[2]^2))
+        # push!(mags, sqrt(mag[1]^2+mag[2]^2))
+
+        mag = mean(res.measure_data.mag[:,1])
+        push!(mags, mag)
+        
         stds=SingleSpinFlip.bin_bootstrap_analysis(res.measure_data.mag)
         push!(mags_std,stds[end])
 
@@ -273,9 +280,12 @@ for L in Ls
     plot!(fig_en,betas,ens,yerr =ens_std,xlabel=L"\beta",ylabel=L"E",label="mc L=$L",legend=:bottomright)
     # plot!(fig_en,betas,[exact_energy(b,L) for b in betas],label="exact L=$L",legend=:bottomright)
     # plot!(fig_en,betas,[exact_energy(b,L) for b in betas],label="exact L=$L",legend=:topleft)
+
     plot!(fig_heat_c,1 ./ betas,L^SingleSpinFlip.NDIMS*heat_c,xlabel=L"k_{B}T/J",ylabel=L"C_{V}",label="mc L=$L",legend=:topright)
+
     # plot!(fig_mag,betas,mags,yerr =mags_std,xlabel=L"\beta",ylabel=L"m",label="L=$L",legend=:topleft)
     plot!(fig_mag,1 ./ betas,mags,yerr=mags_std,xlabel=L"k_{B}T/J",ylabel=L"m",label="L=$L",legend=:topleft)
+
     plot!(fig_tau,betas,taus,label="L=$L",xlabel=L"\beta",ylabel=L"\tau",legend=:topleft)
 end
 fig=plot(fig_en,fig_heat_c,fig_mag,fig_tau,layout=(1,4),size = (1000, 1600))
@@ -293,8 +303,8 @@ display(fig)
 # end
 # @show ee
 #
-sim_data = SingleSpinFlip.SimData(0.01,5,1000,64000)
-ising_data = SingleSpinFlip.IsingData(sim_data, true)
+# sim_data = SingleSpinFlip.SimData(0.01,5,1000,64000)
+# ising_data = SingleSpinFlip.IsingData(sim_data, true)
 # ising_data.ising_lat = v
 # ee = SingleSpinFlip.lat_energy(ising_data)
 #  @show ee
