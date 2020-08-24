@@ -1,6 +1,7 @@
 module SingleSpinFlip
 
-const NDIMS=2
+const TDIMS=0         # Temporal dimension
+const NDIMS=1         # Spatial dimension
 using Statistics
 using Base.Cartesian
 
@@ -102,8 +103,8 @@ function IsingData(sim_data::SimData,start::Bool)
     if start # cold start
         IsingData(
             sim_data,
-            0. * ones(ntuple(k->sim_data.L,NDIMS )),
-            -NDIMS*sim_data.L^NDIMS,
+            0.0 * ones(ntuple(k->sim_data.L,NDIMS )),
+            NDIMS*sim_data.L^NDIMS,
             # initial energy (-1)*Nz/2 if triangular lattice z is more then 2*NDIMS
             MeasureData(sim_data)
         )
@@ -111,7 +112,7 @@ function IsingData(sim_data::SimData,start::Bool)
         IsingData(
             sim_data,
             2*pi*rand(ntuple(k->sim_data.L,NDIMS )...),
-            0., # approxmiated initial energy
+            0.0, # approxmiated initial energy
             MeasureData(sim_data)
         )
     end
@@ -121,7 +122,7 @@ end
 #  Compute single flip $\Delta E$
 on_two_site_E(θ1::Float64,θ2::Float64) = -cos(θ1 - θ2)
 function calc_delta_E(ising_lat::Array{Float64,NDIMS},pos::CartesianIndex, dθ::Float64)
-    E_i = E_f = 0.
+    E_i = E_f = 0.0
     # left right
     for lr in 1:2
         # dims
@@ -155,12 +156,12 @@ function next_step!(ising_data::IsingData)
     α = pi/2
     suggested_dθ = 2*α*(rand()-0.5)
     delta_E=calc_delta_E(ising_lat,flip_site, suggested_dθ)
-    ratio=exp(J*delta_E)
+    ratio=exp(-J*delta_E)
     # accept or reject
     if ratio>rand()
         # flip
         ising_lat[flip_site]=ising_lat[flip_site]+suggested_dθ
-        ising_data.total_energy += delta_E
+        ising_data.total_energy += -delta_E
     end
 end
 
@@ -216,7 +217,7 @@ end
 
 end # SingleSpinFlip module
 
-
+#%%
 using SpecialFunctions: besseli
 
 function exact_energy(beta, L)
@@ -229,14 +230,12 @@ using LaTeXStrings
 using Random
 # Random.seed!(12463)
 gr()
-Ts = range(0.5, length=10,stop=1.5)
-Ts = [0.2,0.6, 0.9, 1.0, 1.05, 1.1, 1.15,1.2,1.4,2,4]
-betas= 1 ./Ts
-# betas=range(0.01, length=2,stop=0.5)
+# Ts = [0.2,0.6, 0.9, 1.0, 1.05, 1.1, 1.15,1.2,1.4,2,4] ;betas= 1 ./Ts
+betas=range(0.1, length=5,stop=2)
 # Ls=[5,10,20]
-Ls=[20]
-num_measure=2^16
-num_thermal=1000
+Ls=[10]
+num_measure=2^17
+num_thermal=10000
 start_cold = true
 fig_en=plot(title="energy")
 fig_heat_c=plot(title="heat capacity")
@@ -269,7 +268,7 @@ for L in Ls
 
         mag = mean(res.measure_data.mag[:,1])
         push!(mags, mag)
-        
+
         stds=SingleSpinFlip.bin_bootstrap_analysis(res.measure_data.mag)
         push!(mags_std,stds[end])
 
@@ -277,14 +276,15 @@ for L in Ls
         tau=0.5*((stds[end]/stds[1])^2-1)
         push!(taus,tau)
     end
-    plot!(fig_en,betas,ens,yerr =ens_std,xlabel=L"\beta",ylabel=L"E",label="mc L=$L",legend=:bottomright)
+    plot!(fig_en, betas, ens, yerr=ens_std, xlabel=L"\beta",ylabel=L"E",label="mc L=$L",legend=:bottomright)
+    # just in 1D:
     # plot!(fig_en,betas,[exact_energy(b,L) for b in betas],label="exact L=$L",legend=:bottomright)
     # plot!(fig_en,betas,[exact_energy(b,L) for b in betas],label="exact L=$L",legend=:topleft)
 
-    plot!(fig_heat_c,1 ./ betas,L^SingleSpinFlip.NDIMS*heat_c,xlabel=L"k_{B}T/J",ylabel=L"C_{V}",label="mc L=$L",legend=:topright)
+    plot!(fig_heat_c,betas,L^SingleSpinFlip.NDIMS*heat_c,xlabel=L"\beta",ylabel=L"C_{V}",label="mc L=$L",legend=:topright)
 
-    # plot!(fig_mag,betas,mags,yerr =mags_std,xlabel=L"\beta",ylabel=L"m",label="L=$L",legend=:topleft)
-    plot!(fig_mag,1 ./ betas,mags,yerr=mags_std,xlabel=L"k_{B}T/J",ylabel=L"m",label="L=$L",legend=:topleft)
+    plot!(fig_mag,betas,mags,yerr =mags_std,xlabel=L"\beta",ylabel=L"m",label="L=$L",legend=:topleft)
+    # plot!(fig_mag,1 ./ betas,mags,yerr=mags_std,xlabel=L"k_{B}T/J",ylabel=L"m",label="L=$L",legend=:topleft)
 
     plot!(fig_tau,betas,taus,label="L=$L",xlabel=L"\beta",ylabel=L"\tau",legend=:topleft)
 end
