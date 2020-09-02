@@ -1,7 +1,7 @@
 module SingleSpinFlip
 
 const TDIMS=1         # Temporal dimension
-const NDIMS=1+TDIMS   # Spatial + Temporal dimensions
+const NDIMS=0+TDIMS   # Spatial + Temporal dimensions
 using Statistics
 using Base.Cartesian
 
@@ -101,23 +101,13 @@ end
 # Initialization
 
 function IsingData(sim_data::SimData,start::Bool)
-    if start # cold start
-        IsingData(
-            sim_data,
-            0.0 * ones(ntuple(k->sim_data.L,NDIMS )),
-            NDIMS*sim_data.L^NDIMS,
-            # initial energy (-1)*Nz/2 if triangular lattice z is more then 2*NDIMS
-            MeasureData(sim_data)
-        )
-    else  # hot start
-        IsingData(
-            sim_data,
-            2*pi*rand(ntuple(k->sim_data.L,NDIMS )...),
-            0.0, # approxmiated initial energy
-            MeasureData(sim_data)
-        )
-    end
-
+    IsingData(
+        sim_data,
+        1.0 * ones(ntuple(k->sim_data.L,NDIMS )),
+        0,
+        # initial energy (-1)*Nz/2 if triangular lattice z is more then 2*NDIMS
+        MeasureData(sim_data)
+    )
 end
 
 function mod2pi_(x)
@@ -126,9 +116,8 @@ function mod2pi_(x)
 end
 
 #  Compute single flip $\Delta E$
-on_two_site_E(θ1::Float64,θ2::Float64) = -cos(θ1 - θ2)
+# on_two_site_E(θ1::Float64,θ2::Float64) = -cos(θ1 - θ2)
 time_direction_energy(θ1::Float64,θ2::Float64) = mod2pi_(θ1 - θ2)^2
-# TODO: What is ϵ?
 function calc_delta_E(ising_lat::Array{Float64,NDIMS},pos::CartesianIndex, dθ::Float64)
     E_i = E_f = 0.0
     # left right
@@ -149,14 +138,6 @@ function calc_delta_E(ising_lat::Array{Float64,NDIMS},pos::CartesianIndex, dθ::
                 E_f += time_direction_energy(ising_lat[nn],ising_lat[pos]+ dθ)
             end
         end
-        # add diagonal dimension
-        # hop to nn and then to nn in the diagonal
-
-        # ds = 1:NDIMS
-        # nn=hop(pos,ds[1],lr,size(ising_lat))
-        # nn=hop(nn,ds[2],lr,size(ising_lat))
-        # E_i += delta_E_func(ising_lat[nn],ising_lat[pos])
-        # E_f += delta_E_func(ising_lat[nn],ising_lat[pos]+ dθ)
     end
     return E_f-E_i
 end
@@ -170,7 +151,7 @@ function next_step!(ising_data::IsingData)
     # flip site
     flip_site=rand(CartesianIndices(ising_lat))
     # calculate ratio
-    α = pi/4
+    α = pi/2
     suggested_dθ = 2*α*(rand()-0.5)
     delta_E=calc_delta_E(ising_lat,flip_site, suggested_dθ)
     ratio=exp(-J*delta_E)
@@ -182,26 +163,11 @@ function next_step!(ising_data::IsingData)
     end
 end
 
-# Direct calculation of energy of the system for 1D
-
-function lat_energy(ising_data::IsingData)
-    ising_lat = ising_data.ising_lat
-    energy = on_two_site_E(ising_lat[1], ising_lat[end])
-    for i in 1:(length(ising_lat)-1)
-        energy += on_two_site_E(ising_lat[i], ising_lat[i+1])
-    end
-    energy
-
-end # lat_energy
-
 # Make a measurement
 
 function make_measurement!(ising_data::IsingData,i)
     lat_size=length(ising_data.ising_lat)
     # average magnetization
-    # magnetization vector
-    mag_vec = [sum(cos.(ising_data.ising_lat)), sum(sin.(ising_data.ising_lat))]
-    ising_data.measure_data.mag[i,:]=mag_vec/lat_size
     # magnetization vector squre
     mag_squre = sum(cos.(ising_data.ising_lat))^2 + sum(sin.(ising_data.ising_lat))^2
     ising_data.measure_data.mag[i,1]=mag_squre/lat_size^2
@@ -229,7 +195,7 @@ function run_mcmc(sim_data::SimData,start::Bool)
         end
         make_measurement!(ising_data,i)
     end
-    ising_data.ising_lat = mod.(ising_data.ising_lat,2*pi)
+    # ising_data.ising_lat = mod.(ising_data.ising_lat,2*pi)
     ising_data
 end
 
@@ -248,14 +214,22 @@ function visualize(ising_data::IsingData)
         ylabel!("Time Direction")
         xlabel!("Spatial Direction")
     end
+    if NDIMS == 1 && TDIMS == 1
+        plot(lat,1:L)
+        scatter!(lat,1:L)
+        xlims!((-pi,pi))
+        xlabel!("θ")
+        ylabel!("τ")
+    end
 end # visualize function
 
 end # SingleSpinFlip module
+
 #%%
 using SpecialFunctions: besseli
 
 function exact_energy(beta, L)
-    besseli(1,beta)/besseli(0,beta)
+    -1/2/beta
 end
 #%%
 # TODO: Need to implemet different coupling in the temporal and the Spatial Directions.
@@ -265,11 +239,10 @@ using LaTeXStrings
 using Random
 # Random.seed!(12463)
 gr()
-# Ts = [0.2,0.6, 0.9, 1.0, 1.05, 1.1, 1.15,1.2,1.4,2,4] ;betas= 1 ./Ts
-betas=range(0.1, length=5,stop=2)
+betas=range(0.1, length=10,stop=2)
 # Ls=[5,10,20]
 # betas = [1]
-Ls=[5]
+Ls=[20]
 num_measure=2^17
 num_thermal=10000
 start_cold = true
@@ -314,7 +287,7 @@ for L in Ls
     end
     plot!(fig_en, betas, ens, yerr=ens_std, xlabel=L"\beta",ylabel=L"E",label="mc L=$L",legend=:bottomright)
     # just in 1D:
-    # plot!(fig_en,betas,[exact_energy(b,L) for b in betas],label="exact L=$L",legend=:bottomright)
+    plot!(fig_en,betas,[exact_energy(b,L) for b in betas],label="exact L=$L",legend=:bottomright)
     # plot!(fig_en,betas,[exact_energy(b,L) for b in betas],label="exact L=$L",legend=:topleft)
 
     plot!(fig_heat_c,betas,L^SingleSpinFlip.NDIMS*heat_c,xlabel=L"\beta",ylabel=L"C_{V}",label="mc L=$L",legend=:topright)
@@ -329,26 +302,11 @@ fig=plot(fig_en,fig_heat_c,fig_mag,fig_tau,size = (800, 800))
 # fig=plot(fig_mag,size = (400, 600))
 display(fig)
 
-#%% testing
-# SingleSpinFlip.NDIMS == 1 || throw("ERROR no way to calculate energy in 2 dim or up")
-# v = [4.2, -0.76, 6.21, 7.31, 9.57]
-# v = [0., 0., 0., 0., 0.]
-# ee = -cos(v[1]-v[end])
-# for i in 1:(length(v)-1)
-#     global ee += -cos(v[i]-v[i+1])
-# end
-# @show ee
-#
-# sim_data = SingleSpinFlip.SimData(0.01,5,1000,64000)
-# ising_data = SingleSpinFlip.IsingData(sim_data, true)
-# ising_data.ising_lat = v
-# ee = SingleSpinFlip.lat_energy(ising_data)
-#  @show ee
-
 #%%
-b=1/2
-L=10
+b=0.01
+L=20
 
 sim_data=SingleSpinFlip.SimData(b,L,num_measure,num_thermal)
 res=SingleSpinFlip.run_mcmc(sim_data,start_cold)    # start with all spins at the same direction
 SingleSpinFlip.visualize(res)
+#%%
