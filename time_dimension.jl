@@ -4,6 +4,7 @@ const TDIMS=1         # Temporal dimension
 const NDIMS=0+TDIMS   # Spatial + Temporal dimensions
 using Statistics
 using Base.Cartesian
+using Distributions: Normal
 
 # Hop to nearest-neighbor site
 
@@ -11,7 +12,7 @@ function hop(index::CartesianIndex{NDIMS},dir::Int64,lr::Int64,dims::NTuple{NDIM
     # update index
     # @show index, dir, lr, dims
     if (lr==1)
-      hop_index= index[dir]==dims[dir] ? 1 : index[dir]+1
+        hop_index= index[dir]==dims[dir] ? 1 : index[dir]+1
     else
         hop_index= index[dir]==1 ? dims[dir] : index[dir]-1
     end
@@ -65,8 +66,10 @@ end
 mutable struct SimData
     # coupling (in units of T)
     J::Float64
-    # size
+    # spatial size
     L::Int64
+    # time dimension length
+    M::Int64
     # numbers of measurements
     num_measure::Int64
     # numbers of themalization steps
@@ -96,17 +99,27 @@ mutable struct IsingData
     total_energy::Float64
     # measurements data
     measure_data::MeasureData
+    #### worm information ####
+    # the worm angle
+    θ_worm::Float64
+    # worm index
+    pos_worm::CartesianIndex{NDIMS}
+    #  whether or not the worm is closed
+    is_closed::Bool
+
 end
 
 # Initialization
-
-function IsingData(sim_data::SimData,start::Bool)
+function IsingData(sim_data::SimData)
     IsingData(
         sim_data,
         1.0 * ones(ntuple(k->sim_data.L,NDIMS )),
         0,
         # initial energy (-1)*Nz/2 if triangular lattice z is more then 2*NDIMS
-        MeasureData(sim_data)
+        MeasureData(sim_data),
+        0.0,
+        CartesianIndex(1),
+        true
     )
 end
 
@@ -117,8 +130,8 @@ end
 
 #  Compute single flip $\Delta E$
 # on_two_site_E(θ1::Float64,θ2::Float64) = -cos(θ1 - θ2)
-time_direction_energy(θ1::Float64,θ2::Float64) = mod2pi_(θ1 - θ2)^2
-function calc_delta_E(ising_lat::Array{Float64,NDIMS},pos::CartesianIndex, dθ::Float64)
+time_direction_energy(θ1::Float64,θ2::Float64,eps_::Float64) = mod2pi_(θ1 - θ2)^2/eps_^2
+function calc_delta_E(ising_lat::Array{Float64,NDIMS},pos::CartesianIndex, dθ::Float64, eps_::Float64)
     E_i = E_f = 0.0
     # left right
     for lr in 1:2
@@ -134,8 +147,8 @@ function calc_delta_E(ising_lat::Array{Float64,NDIMS},pos::CartesianIndex, dθ::
                 # Temporal dims
                 d = NDIMS
                 nn=hop(pos,d,lr,size(ising_lat))
-                E_i += time_direction_energy(ising_lat[nn],ising_lat[pos])
-                E_f += time_direction_energy(ising_lat[nn],ising_lat[pos]+ dθ)
+                E_i += time_direction_energy(ising_lat[nn],ising_lat[pos],eps_)
+                E_f += time_direction_energy(ising_lat[nn],ising_lat[pos]+ dθ,eps_)
             end
         end
     end
@@ -143,26 +156,82 @@ function calc_delta_E(ising_lat::Array{Float64,NDIMS},pos::CartesianIndex, dθ::
 end
 
 #  Single step
-
 function next_step!(ising_data::IsingData)
+    # change angle
     J=ising_data.sim_data.J
     ising_lat=ising_data.ising_lat
+    eps_ = ising_data.sim_data.J/ising_data.sim_data.M # TODO: verify this
     # current_energy = ising_data.total_energy
     # flip site
     flip_site=rand(CartesianIndices(ising_lat))
     # calculate ratio
-    α = pi/2
+    α = pi/4
     suggested_dθ = 2*α*(rand()-0.5)
-    delta_E=calc_delta_E(ising_lat,flip_site, suggested_dθ)
+    delta_E=calc_delta_E(ising_lat,flip_site, suggested_dθ,eps_)
     ratio=exp(-J*delta_E)
     # accept or reject
     if ratio>rand()
         # flip
-        ising_lat[flip_site]=mod2pi_(ising_lat[flip_site]+suggested_dθ)
+        ising_lat[flip_site] = mod2pi_(ising_lat[flip_site]+suggested_dθ)
         ising_data.total_energy += -delta_E
     end
+    propose_worm_moves!(ising_data)
 end
 
+function propose_worm_moves!(ising_data::IsingData)
+    J=ising_data.sim_data.J
+    ising_lat=ising_data.ising_lat
+    eps_ = ising_data.sim_data.J/ising_data.sim_data.M # TODO: verify this
+    draw_move = rand(1:3)
+    if draw_move == 1
+        # propose open/close for worm
+        if ising_data.is_closed
+            # suggeste to open
+            d = Normal(0, sqrt(eps_/2J))
+            θ_worm = rand(d)
+            pos = rand(CartesianIndices(ising_lat))
+            npos = hop(pos,NDIMS,2,size(ising_lat))
+            # does not depend on the suggested θ_worm
+            A = min(1,exp((ising_lat[npos]-ising_lat[pos])^2/(eps_/2J)))
+            if A > rand()
+                ising_data.is_closed = false
+                ising_data.pos_worm = pos
+                ising_data.θ_worm = θ_worm
+            end
+        end
+    elseif draw_move == 2
+        if ! ising_data.is_closed
+            # suggeste to close
+            pos = ising_data.pos_worm
+            npos = hop(pos,NDIMS,2,size(ising_lat))
+            A = min(1, exp(-(ising_lat[npos]-ising_lat[pos])^2/(eps_/J)))
+            if A > rand()
+                ising_data.is_closed = true
+            end
+        end
+    elseif draw_move == 3
+        # shift open/close for worm
+        return 0.
+        if !ising_data.is_closed
+            d = Normal(0, sqrt(eps_/2J))
+            θ_worm = rand(d)
+            pos = ising_data.pos_worm
+            up_or_down = rand(1:2)
+            npos = hop(pos,NDIMS,up_or_down,size(ising_lat))
+            A = true
+            if A
+                if up_or_down == 2
+                    # up
+                    ising_data.θ_worm = ising_lat[npos]
+                    ising_lat[pos] = θ_worm
+                else
+                    # down
+                    ising_data.θ_worm = θ_worm
+                end
+            end
+        end
+    end
+end
 # Make a measurement
 
 function make_measurement!(ising_data::IsingData,i)
@@ -177,8 +246,8 @@ end
 
 # MCMC run
 
-function run_mcmc(sim_data::SimData,start::Bool)
-    ising_data=IsingData(sim_data, start)
+function run_mcmc(sim_data::SimData)
+    ising_data=IsingData(sim_data)
     lat_size=length(ising_data.ising_lat)
     # thermalize
     for i in 1:sim_data.num_thermal
@@ -188,14 +257,20 @@ function run_mcmc(sim_data::SimData,start::Bool)
         end
     end
     # measure
+    count = 0
     for i in 1:sim_data.num_measure
         # sweep
         for j in 1:lat_size
             next_step!(ising_data)
         end
-        make_measurement!(ising_data,i)
+
+        if ising_data.is_closed
+            make_measurement!(ising_data,i)
+            count += 1
+        end
     end
-    # ising_data.ising_lat = mod.(ising_data.ising_lat,2*pi)
+    println(count/sim_data.num_measure)
+    # ising_data.ising_lat = mod2p_.(ising_data.ising_lat)
     ising_data
 end
 
@@ -227,10 +302,19 @@ end # SingleSpinFlip module
 
 #%%
 using SpecialFunctions: besseli
+include("elip.jl")
 
 function exact_energy(beta, L)
-    -1/2/beta
+    # z = get_elip(exp(-beta))
+    # e = -∂_beta (log(z));
+
+    # e_β = exp(-beta)
+    # e_β*get_der_elip(e_β)/get_elip(e_β)
+
+    # -get_der_log_elip_exp(-beta)
+    get_der_elip(beta)/get_elip(beta)
 end
+
 #%%
 # TODO: Need to implemet different coupling in the temporal and the Spatial Directions.
 using Plots
@@ -239,13 +323,12 @@ using LaTeXStrings
 using Random
 # Random.seed!(12463)
 gr()
-betas=range(0.1, length=10,stop=2)
+betas=range(0.05, length=10,stop=2)
 # Ls=[5,10,20]
 # betas = [1]
 Ls=[20]
-num_measure=2^17
+num_measure=2^18
 num_thermal=10000
-start_cold = true
 fig_en=plot(title="energy")
 fig_heat_c=plot(title="heat capacity")
 fig_mag=plot(title="magnetization")
@@ -259,8 +342,8 @@ for L in Ls
     mags_std=Float64[]
     taus=Float64[]
     for b in betas
-        sim_data=SingleSpinFlip.SimData(b,L,num_measure,num_thermal)
-        global res=SingleSpinFlip.run_mcmc(sim_data,start_cold)    # start with all spins at the same direction
+        sim_data=SingleSpinFlip.SimData(b,L,L,num_measure,num_thermal)
+        global res=SingleSpinFlip.run_mcmc(sim_data)    # start with all spins at the same direction
         # global res=SingleSpinFlip.run_mcmc(sim_data,!start_cold)  # start with all spins  in random  direction
 
         # ENERGY
@@ -303,10 +386,22 @@ fig=plot(fig_en,fig_heat_c,fig_mag,fig_tau,size = (800, 800))
 display(fig)
 
 #%%
-b=0.01
-L=20
-
-sim_data=SingleSpinFlip.SimData(b,L,num_measure,num_thermal)
-res=SingleSpinFlip.run_mcmc(sim_data,start_cold)    # start with all spins at the same direction
-SingleSpinFlip.visualize(res)
+function run_(num_measure,num_thermal)
+    b=10
+    L=20
+    sim_data=SingleSpinFlip.SimData(b,L,L,num_measure,num_thermal)
+    res=SingleSpinFlip.run_mcmc(sim_data)    # start with all spins at the same direction
+    display(SingleSpinFlip.visualize(res))
+    W = 0
+    for i in 1:L
+        j = i != 1 ? i - 1 : L
+        W = W + SingleSpinFlip.mod2pi_(res.ising_lat[i] - res.ising_lat[j])*L/b
+    end
+    # W = round(W/2*pi, digits=2)
+    @show W
+    @show res.is_closed
+end
+run_(num_measure,num_thermal)
 #%%
+r = SingleSpinFlip.IsingData(sim_data)
+SingleSpinFlip.MeasureData
