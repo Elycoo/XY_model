@@ -157,30 +157,42 @@ end
 
 #  Single step
 function next_step!(ising_data::IsingData)
-    # change angle
     J=ising_data.sim_data.J
     ising_lat=ising_data.ising_lat
     eps_ = ising_data.sim_data.J/ising_data.sim_data.M # TODO: verify this
-    # current_energy = ising_data.total_energy
+
     # flip site
     flip_site=rand(CartesianIndices(ising_lat))
-    # calculate ratio
-    α = pi/4
-    suggested_dθ = 2*α*(rand()-0.5)
-    delta_E=calc_delta_E(ising_lat,flip_site, suggested_dθ,eps_)
-    ratio=exp(-J*delta_E)
-    # accept or reject
-    if ratio>rand()
-        # flip
-        ising_lat[flip_site] = mod2pi_(ising_lat[flip_site]+suggested_dθ)
-        ising_data.total_energy += -delta_E
+    if flip_site != ising_data.pos_worm
+        # change angle
+        α = pi/4
+        suggested_dθ = 2*α*(rand()-0.5)
+        # calculate ratio
+        delta_E=calc_delta_E(ising_lat,flip_site, suggested_dθ,eps_)
+        # if delta_E > 4000
+        #     display(visualize(ising_data))
+        #     println(ising_lat)
+        #     println(eps_)
+        #     println(ising_data.θ_worm)
+        #     println(ising_data.pos_worm)
+        #     println(ising_data.is_closed)
+        #     println()
+        #     error("my error")
+        # end
+        ratio=exp(-J*delta_E)
+        # accept or reject
+        if ratio>rand()
+            # flip
+            ising_lat[flip_site] = mod2pi_(ising_lat[flip_site]+suggested_dθ)
+            ising_data.total_energy += -delta_E
+        end
     end
     propose_worm_moves!(ising_data)
 end
-
+#%%
 function propose_worm_moves!(ising_data::IsingData)
-    J=ising_data.sim_data.J
-    ising_lat=ising_data.ising_lat
+    J = ising_data.sim_data.J
+    ising_lat = ising_data.ising_lat
     eps_ = ising_data.sim_data.J/ising_data.sim_data.M # TODO: verify this
     draw_move = rand(1:3)
     if draw_move == 1
@@ -222,18 +234,20 @@ function propose_worm_moves!(ising_data::IsingData)
             if A
                 if up_or_down == 2
                     # up
+                    ising_data.pos_worm = npos
                     ising_data.θ_worm = ising_lat[npos]
                     ising_lat[pos] = θ_worm
                 else
                     # down
+                    ising_data.pos_worm = npos
                     ising_data.θ_worm = θ_worm
                 end
             end
         end
     end
 end
-# Make a measurement
 
+# Make a measurement
 function make_measurement!(ising_data::IsingData,i)
     lat_size=length(ising_data.ising_lat)
     # average magnetization
@@ -312,7 +326,8 @@ function exact_energy(beta, L)
     # e_β*get_der_elip(e_β)/get_elip(e_β)
 
     # -get_der_log_elip_exp(-beta)
-    get_der_elip(beta)/get_elip(beta)
+    get_der_elip(beta)/2get_elip(beta)
+    # -1/2sqrt(beta)
 end
 
 #%%
@@ -323,7 +338,7 @@ using LaTeXStrings
 using Random
 # Random.seed!(12463)
 gr()
-betas=range(0.05, length=10,stop=2)
+betas=range(0.5, length=10,stop=2)
 # Ls=[5,10,20]
 # betas = [1]
 Ls=[20]
@@ -403,5 +418,8 @@ function run_(num_measure,num_thermal)
 end
 run_(num_measure,num_thermal)
 #%%
+b=10
+L=20
+sim_data=SingleSpinFlip.SimData(b,L,L,num_measure,num_thermal)
 r = SingleSpinFlip.IsingData(sim_data)
 SingleSpinFlip.MeasureData
