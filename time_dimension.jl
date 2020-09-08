@@ -161,35 +161,25 @@ function next_step!(ising_data::IsingData)
     ising_lat=ising_data.ising_lat
     eps_ = ising_data.sim_data.J/ising_data.sim_data.M # TODO: verify this
 
-    # flip site
-    flip_site=rand(CartesianIndices(ising_lat))
-    if flip_site != ising_data.pos_worm
-        # change angle
-        α = pi/4
-        suggested_dθ = 2*α*(rand()-0.5)
-        # calculate ratio
-        delta_E=calc_delta_E(ising_lat,flip_site, suggested_dθ,eps_)
-        # if delta_E > 4000
-        #     display(visualize(ising_data))
-        #     println(ising_lat)
-        #     println(eps_)
-        #     println(ising_data.θ_worm)
-        #     println(ising_data.pos_worm)
-        #     println(ising_data.is_closed)
-        #     println()
-        #     error("my error")
-        # end
-        ratio=exp(-J*delta_E)
-        # accept or reject
-        if ratio>rand()
-            # flip
-            ising_lat[flip_site] = mod2pi_(ising_lat[flip_site]+suggested_dθ)
-            ising_data.total_energy += -delta_E
-        end
-    end
-    propose_worm_moves!(ising_data)
+    # if rand(1:4) == 1
+        # flip site
+        flip_site=rand(CartesianIndices(ising_lat))
+        flip_site_nn = []
+        push!(flip_site_nn, hop(flip_site,NDIMS,1,size(ising_lat)) )
+        push!(flip_site_nn, hop(flip_site,NDIMS,2,size(ising_lat)) )
+
+        d = Normal(0, sqrt(eps_/4J))
+        mean_ = (ising_lat[flip_site_nn[1]] +  ising_lat[flip_site_nn[1]])/2
+        θ =  mean_ + rand(d)
+
+        # always accept! (?)
+        # flip
+        ising_lat[flip_site] = mod2pi_(θ)
+    # else
+        propose_worm_moves!(ising_data)
+    # end
 end
-#%%
+#%
 function propose_worm_moves!(ising_data::IsingData)
     J = ising_data.sim_data.J
     ising_lat = ising_data.ising_lat
@@ -223,7 +213,7 @@ function propose_worm_moves!(ising_data::IsingData)
         end
     elseif draw_move == 3
         # shift open/close for worm
-        return 0.
+        # return 0.
         if !ising_data.is_closed
             d = Normal(0, sqrt(eps_/2J))
             θ_worm = rand(d)
@@ -279,6 +269,7 @@ function run_mcmc(sim_data::SimData)
         end
 
         if ising_data.is_closed
+            calculate_energy!(ising_data)
             make_measurement!(ising_data,i)
             count += 1
         end
@@ -286,6 +277,17 @@ function run_mcmc(sim_data::SimData)
     println(count/sim_data.num_measure)
     # ising_data.ising_lat = mod2p_.(ising_data.ising_lat)
     ising_data
+end
+
+function calculate_energy!(ising_data::IsingData)
+    e = 0.0
+    ising_lat = ising_data.ising_lat
+    eps_ = ising_data.sim_data.J / ising_data.sim_data.M
+    for i in 1:ising_data.sim_data.M
+        j = i != 1 ? i - 1 : ising_data.sim_data.M
+        e += time_direction_energy(ising_lat[i],ising_lat[j], eps_)
+    end
+    ising_data.total_energy = e * ising_data.sim_data.J 
 end
 
 using Plots
@@ -326,8 +328,8 @@ function exact_energy(beta, L)
     # e_β*get_der_elip(e_β)/get_elip(e_β)
 
     # -get_der_log_elip_exp(-beta)
-    get_der_elip(beta)/2get_elip(beta)
-    # -1/2sqrt(beta)
+    -get_der_elip(beta)/get_elip(beta)
+    # 1/sqrt(beta)
 end
 
 #%%
@@ -362,7 +364,7 @@ for L in Ls
         # global res=SingleSpinFlip.run_mcmc(sim_data,!start_cold)  # start with all spins  in random  direction
 
         # ENERGY
-        push!(ens,mean(res.measure_data.energy))
+        push!(ens,mean(res.measure_data.energy)/L)
         stds=SingleSpinFlip.bin_bootstrap_analysis(res.measure_data.energy)
         push!(ens_std,stds[end])
 
@@ -383,9 +385,9 @@ for L in Ls
         tau=0.5*((stds[end]/stds[1])^2-1)
         push!(taus,tau)
     end
-    plot!(fig_en, betas, ens, yerr=ens_std, xlabel=L"\beta",ylabel=L"E",label="mc L=$L",legend=:bottomright)
+    plot!(fig_en, betas, ens, yerr=ens_std, xlabel=L"\beta",ylabel=L"E",label="mc L=$L",legend=:topright)
     # just in 1D:
-    plot!(fig_en,betas,[exact_energy(b,L) for b in betas],label="exact L=$L",legend=:bottomright)
+    plot!(fig_en,betas,[exact_energy(b,L) for b in betas],label="exact L=$L",legend=:topright)
     # plot!(fig_en,betas,[exact_energy(b,L) for b in betas],label="exact L=$L",legend=:topleft)
 
     plot!(fig_heat_c,betas,L^SingleSpinFlip.NDIMS*heat_c,xlabel=L"\beta",ylabel=L"C_{V}",label="mc L=$L",legend=:topright)
@@ -402,7 +404,8 @@ display(fig)
 
 #%%
 function run_(num_measure,num_thermal)
-    b=10
+    b=1/1000
+    b=1000
     L=20
     sim_data=SingleSpinFlip.SimData(b,L,L,num_measure,num_thermal)
     res=SingleSpinFlip.run_mcmc(sim_data)    # start with all spins at the same direction
@@ -412,7 +415,7 @@ function run_(num_measure,num_thermal)
         j = i != 1 ? i - 1 : L
         W = W + SingleSpinFlip.mod2pi_(res.ising_lat[i] - res.ising_lat[j])*L/b
     end
-    # W = round(W/2*pi, digits=2)
+    W = round(W/2*pi, digits=2)
     @show W
     @show res.is_closed
 end
