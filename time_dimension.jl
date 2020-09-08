@@ -128,113 +128,105 @@ function mod2pi_(x)
     x > pi ? x-2*pi : x
 end
 
-#  Compute single flip $\Delta E$
-# on_two_site_E(θ1::Float64,θ2::Float64) = -cos(θ1 - θ2)
-time_direction_energy(θ1::Float64,θ2::Float64,eps_::Float64) = mod2pi_(θ1 - θ2)^2/eps_^2
-function calc_delta_E(ising_lat::Array{Float64,NDIMS},pos::CartesianIndex, dθ::Float64, eps_::Float64)
-    E_i = E_f = 0.0
-    # left right
-    for lr in 1:2
-        for d in 1:(NDIMS-TDIMS)
-            # hop to nn
-            nn=hop(pos,d,lr,size(ising_lat))
-            # Spatial dims
-            E_i += on_two_site_E(ising_lat[nn],ising_lat[pos])
-            E_f += on_two_site_E(ising_lat[nn],ising_lat[pos]+ dθ)
-        end
-        if lr <= 2 # TODO: check if that true - just forward time checking
-            if TDIMS == 1
-                # Temporal dims
-                d = NDIMS
-                nn=hop(pos,d,lr,size(ising_lat))
-                E_i += time_direction_energy(ising_lat[nn],ising_lat[pos],eps_)
-                E_f += time_direction_energy(ising_lat[nn],ising_lat[pos]+ dθ,eps_)
-            end
-        end
-    end
-    return E_f-E_i
-end
-
 #  Single step
 function next_step!(ising_data::IsingData)
-    J=ising_data.sim_data.J
-    ising_lat=ising_data.ising_lat
-    eps_ = ising_data.sim_data.J/ising_data.sim_data.M # TODO: verify this
-
-    # if rand(1:4) == 1
-        # flip site
-        flip_site=rand(CartesianIndices(ising_lat))
-        flip_site_nn = []
-        push!(flip_site_nn, hop(flip_site,NDIMS,1,size(ising_lat)) )
-        push!(flip_site_nn, hop(flip_site,NDIMS,2,size(ising_lat)) )
-
-        d = Normal(0, sqrt(eps_/4J))
-        mean_ = (ising_lat[flip_site_nn[1]] +  ising_lat[flip_site_nn[1]])/2
-        θ =  mean_ + rand(d)
-
-        # always accept! (?)
-        # flip
-        ising_lat[flip_site] = mod2pi_(θ)
-    # else
-        propose_worm_moves!(ising_data)
-    # end
-end
-#%
-function propose_worm_moves!(ising_data::IsingData)
-    J = ising_data.sim_data.J
-    ising_lat = ising_data.ising_lat
-    eps_ = ising_data.sim_data.J/ising_data.sim_data.M # TODO: verify this
-    draw_move = rand(1:3)
+    draw_move = rand(2:3)
+    change_angle!(ising_data)
     if draw_move == 1
-        # propose open/close for worm
-        if ising_data.is_closed
-            # suggeste to open
-            d = Normal(0, sqrt(eps_/2J))
-            θ_worm = rand(d)
-            pos = rand(CartesianIndices(ising_lat))
-            npos = hop(pos,NDIMS,2,size(ising_lat))
-            # does not depend on the suggested θ_worm
-            A = min(1,exp((ising_lat[npos]-ising_lat[pos])^2/(eps_/2J)))
-            if A > rand()
-                ising_data.is_closed = false
-                ising_data.pos_worm = pos
-                ising_data.θ_worm = θ_worm
-            end
-        end
     elseif draw_move == 2
-        if ! ising_data.is_closed
-            # suggeste to close
-            pos = ising_data.pos_worm
-            npos = hop(pos,NDIMS,2,size(ising_lat))
-            A = min(1, exp(-(ising_lat[npos]-ising_lat[pos])^2/(eps_/J)))
-            if A > rand()
-                ising_data.is_closed = true
-            end
+        if ising_data.is_closed
+            open_worm!(ising_data)
         end
     elseif draw_move == 3
-        # shift open/close for worm
-        # return 0.
         if !ising_data.is_closed
-            d = Normal(0, sqrt(eps_/2J))
-            θ_worm = rand(d)
-            pos = ising_data.pos_worm
-            up_or_down = rand(1:2)
-            npos = hop(pos,NDIMS,up_or_down,size(ising_lat))
-            A = true
-            if A
-                if up_or_down == 2
-                    # up
-                    ising_data.pos_worm = npos
-                    ising_data.θ_worm = ising_lat[npos]
-                    ising_lat[pos] = θ_worm
-                else
-                    # down
-                    ising_data.pos_worm = npos
-                    ising_data.θ_worm = θ_worm
-                end
-            end
+            close_worm!(ising_data)
+        end
+    elseif draw_move == 4
+        if !ising_data.is_closed
+            shift_worm!(ising_data)
         end
     end
+end
+function change_angle!(ising_data::IsingData)
+    J=ising_data.sim_data.J
+    ising_lat=ising_data.ising_lat
+    eps_ = J/ising_data.sim_data.M
+
+    # flip site
+    flip_site=rand(CartesianIndices(ising_lat))
+    flip_site_nn = []
+    push!(flip_site_nn, hop(flip_site,NDIMS,1,size(ising_lat)) )
+    push!(flip_site_nn, hop(flip_site,NDIMS,2,size(ising_lat)) )
+
+    d = Normal(0, sqrt(eps_/2J))
+    mean_ = (ising_lat[flip_site_nn[1]] +  ising_lat[flip_site_nn[1]])/2
+    θ =  mean_ + rand(d)
+
+    # always accept! (?)
+    # flip
+    ising_lat[flip_site] = mod2pi_(θ)
+    true
+end
+#%
+function open_worm!(ising_data::IsingData)
+    J = ising_data.sim_data.J
+    ising_lat = ising_data.ising_lat
+    eps_ = J/ising_data.sim_data.M
+    # suggeste to open
+    d = Normal(0, sqrt(eps_/2J))
+    θ_worm = rand(d)
+    pos = rand(CartesianIndices(ising_lat))
+    npos = hop(pos,NDIMS,2,size(ising_lat))
+    # does not depend on the suggested θ_worm
+    A = min(1,exp((ising_lat[npos]-ising_lat[pos])^2/(eps_/J)))
+    if A > rand()
+        ising_data.is_closed = false
+        ising_data.pos_worm = pos
+        ising_data.θ_worm = θ_worm
+    end
+    true
+end
+function close_worm!(ising_data::IsingData)
+    # suggeste to close
+    J = ising_data.sim_data.J
+    ising_lat = ising_data.ising_lat
+    eps_ = J/ising_data.sim_data.M
+
+    pos = ising_data.pos_worm
+    npos = hop(pos,NDIMS,2,size(ising_lat))
+    A = min(1, exp(-(ising_lat[npos]-ising_lat[pos])^2/(eps_/J)))
+    if A > rand()
+        ising_data.is_closed = true
+    end
+    true
+end
+
+function shift_worm!(ising_data::IsingData)
+    # return true
+    println("I'm here")
+    J = ising_data.sim_data.J
+    ising_lat = ising_data.ising_lat
+    eps_ = J/ising_data.sim_data.M
+
+    d = Normal(0, sqrt(eps_/2J))
+    θ_worm = rand(d)
+    pos = ising_data.pos_worm
+    up_or_down = rand(1:2)
+    npos = hop(pos,NDIMS,up_or_down,size(ising_lat))
+    A = true
+    if A
+        if up_or_down == 2
+            # up
+            ising_data.pos_worm = npos
+            ising_data.θ_worm = ising_lat[npos]
+            ising_lat[pos] = θ_worm
+        else
+            # down
+            ising_data.pos_worm = npos
+            ising_data.θ_worm = θ_worm
+        end
+    end
+    true
 end
 
 # Make a measurement
@@ -270,7 +262,7 @@ function run_mcmc(sim_data::SimData)
 
         if ising_data.is_closed
             calculate_energy!(ising_data)
-            make_measurement!(ising_data,i)
+            make_measurement!(ising_data, i)
             count += 1
         end
     end
@@ -279,6 +271,7 @@ function run_mcmc(sim_data::SimData)
     ising_data
 end
 
+time_direction_energy(θ1::Float64,θ2::Float64,eps_::Float64) = mod2pi_(θ1 - θ2)^2/eps_^2
 function calculate_energy!(ising_data::IsingData)
     e = 0.0
     ising_lat = ising_data.ising_lat
@@ -287,7 +280,7 @@ function calculate_energy!(ising_data::IsingData)
         j = i != 1 ? i - 1 : ising_data.sim_data.M
         e += time_direction_energy(ising_lat[i],ising_lat[j], eps_)
     end
-    ising_data.total_energy = e * ising_data.sim_data.J 
+    ising_data.total_energy = e * eps_
 end
 
 using Plots
@@ -335,12 +328,16 @@ end
 #%%
 # TODO: Need to implemet different coupling in the temporal and the Spatial Directions.
 using Plots
+default(titlefontsize = 18,
+        legendfontsize = 15,
+        guidefontsize = 15,
+        tickfontsize = 15)
 using Statistics
 using LaTeXStrings
 using Random
 # Random.seed!(12463)
 gr()
-betas=range(0.5, length=10,stop=2)
+betas=range(0.1, length=10,stop=2)
 # Ls=[5,10,20]
 # betas = [1]
 Ls=[20]
@@ -364,7 +361,7 @@ for L in Ls
         # global res=SingleSpinFlip.run_mcmc(sim_data,!start_cold)  # start with all spins  in random  direction
 
         # ENERGY
-        push!(ens,mean(res.measure_data.energy)/L)
+        push!(ens,mean(res.measure_data.energy))
         stds=SingleSpinFlip.bin_bootstrap_analysis(res.measure_data.energy)
         push!(ens_std,stds[end])
 
@@ -399,6 +396,7 @@ for L in Ls
 end
 fig=plot(fig_en,fig_heat_c,fig_mag,fig_tau,layout=(1,4),size = (1000, 1600))
 fig=plot(fig_en,fig_heat_c,fig_mag,fig_tau,size = (800, 800))
+fig=plot(fig_en)
 # fig=plot(fig_mag,size = (400, 600))
 display(fig)
 
