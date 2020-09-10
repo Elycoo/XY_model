@@ -1,6 +1,6 @@
 module elip
 
-export get_elip,get_der_elip
+export get_elip,get_der_elip, elip_sum,elip_energy
 # export get_der_log_elip_exp
 
 x_elip=[0.01
@@ -5036,6 +5036,19 @@ end
 # end
 
 
+function elip_sum(beta; cutoff=5)
+    l_cutoff = ceil(abs(cutoff * sqrt(1/beta)))
+    l_rng_2 = (-l_cutoff:l_cutoff).^2
+    sum(exp.(.-beta.*l_rng_2))
+end
+
+function elip_energy(beta; cutoff=5)
+    l_cutoff = ceil(abs(cutoff * sqrt(1/beta)))
+    l_rng_2 = (-l_cutoff:l_cutoff).^2
+    sum(l_rng_2.*exp.(.-beta.*l_rng_2)) / sum(exp.(.-beta.*l_rng_2))
+end
+
 end  # module elip
 
 using ..elip
+# no need anymore

@@ -153,7 +153,7 @@ end
 function change_angle!(ising_data::IsingData)
     β=ising_data.sim_data.β
     ising_lat=ising_data.ising_lat
-    eps_ = β/ising_data.sim_data.M
+    eps_ = 1/ising_data.sim_data.M
 
     # flip site
     flip_site=rand(CartesianIndices(ising_lat))
@@ -161,8 +161,8 @@ function change_angle!(ising_data::IsingData)
     push!(flip_site_nn, hop(flip_site,NDIMS,1,size(ising_lat)) )
     push!(flip_site_nn, hop(flip_site,NDIMS,2,size(ising_lat)) )
 
-    mean_ = (ising_lat[flip_site_nn[1]] +  ising_lat[flip_site_nn[1]])/2
-    d = Normal(mean_, sqrt(eps_/4))
+    mean_ = (ising_lat[flip_site_nn[1]] + ising_lat[flip_site_nn[1]])/2
+    d = Normal(mean_, sqrt(eps_/4)) # TODO: here
     θ = rand(d)
 
     # always accept!
@@ -174,37 +174,44 @@ end
 function open_worm!(ising_data::IsingData)
     β = ising_data.sim_data.β
     ising_lat = ising_data.ising_lat
-    eps_ = β/ising_data.sim_data.M
+    eps_ = 1/ising_data.sim_data.M
 
-    # suggeste to open
+    # suggest to open
     pos = rand(CartesianIndices(ising_lat))
+    # TODO: maybe should draw direction to move?
+    # NO - because it does not make sense to make another drawing - it just to darwing another position
     npos = hop(pos,NDIMS,1,size(ising_lat))
 
     # does not depend on the suggested θ_worm
+    # TODO: in notes is without the minus - but that cant be true
+    #       maybe it make sense for u<0
+
+    # accept
     A = min(1, exp(((ising_lat[npos]-ising_lat[pos])^2)/eps_))
 
     if A > rand()
-        # accept
         d = Normal(ising_lat[npos], sqrt(eps_/2))
         θ_worm = rand(d)
 
         ising_data.is_closed = false
         ising_data.pos_worm = pos
-        ising_data.θ_worm = θ_worm
+        ising_data.θ_worm = mod2pi_(θ_worm)
+
         true
     else
         false
     end
 end
 function close_worm!(ising_data::IsingData)
+    # suggest to close
     β = ising_data.sim_data.β
-    # suggeste to close
     ising_lat = ising_data.ising_lat
-    eps_ = β/ising_data.sim_data.M
+    eps_ = 1/ising_data.sim_data.M
 
     pos = ising_data.pos_worm
     npos = hop(pos,NDIMS,1,size(ising_lat))
-    A = min(1, exp(-(ising_lat[npos]-ising_lat[pos])^2/(eps_)))
+    # accept?
+    A = min(1, exp(-(ising_lat[npos]-ising_lat[pos])^2/eps_))
     if A > rand()
         ising_data.is_closed = true
     else
@@ -215,13 +222,13 @@ end
 function shift_worm!(ising_data::IsingData)
     β = ising_data.sim_data.β
     ising_lat = ising_data.ising_lat
-    eps_ = β/ising_data.sim_data.M
+    eps_ = 1/ising_data.sim_data.M
     pos = ising_data.pos_worm
 
     up_or_down = rand(1:2)
     npos = hop(pos,NDIMS,up_or_down,size(ising_lat))
 
-    # TODO: check about the mean in the distributions
+    # TODO: check about the mean in the distributions does it depend on the up\down move?
     # always accept!
     if up_or_down == 1
         # up
@@ -230,7 +237,7 @@ function shift_worm!(ising_data::IsingData)
 
         ising_data.pos_worm = npos
         ising_data.θ_worm = ising_lat[npos]
-        ising_lat[npos] = θ_new
+        ising_lat[npos] = mod2pi_(θ_new)
     else
         # down
         d = Normal(ising_data.θ_worm, sqrt(eps_/2))
@@ -238,7 +245,7 @@ function shift_worm!(ising_data::IsingData)
 
         ising_data.pos_worm = npos
         ising_lat[pos] = ising_data.θ_worm
-        ising_data.θ_worm = θ_new
+        ising_data.θ_worm = mod2pi_(θ_new)
     end
     true
 end
@@ -251,6 +258,7 @@ function make_measurement!(ising_data::IsingData, i::Int64)
     # mag_squre = sum(cos.(ising_data.ising_lat))^2 + sum(sin.(ising_data.ising_lat))^2
     # ising_data.measure_data.mag[i,1]=mag_squre/lat_size^2
     # energy density
+    # TODO: maybe here
     ising_data.measure_data.energy[i]=ising_data.total_energy/lat_size
 end
 
@@ -281,7 +289,7 @@ function run_mcmc(sim_data::SimData)
         end
     end
     println(count/sim_data.num_measure)
-    # ising_data.ising_lat = mod2p_.(ising_data.ising_lat)
+    # ising_data.ising_lat = mod2p_.(ising_dat`a.ising_lat)
     ising_data
 end
 
@@ -335,7 +343,7 @@ end # SingleSpinFlip module
 
 #%%
 using SpecialFunctions: besseli
-include("elip.jl")
+# include("elip.jl")
 
 function exact_energy(beta, L)
     # z = get_elip(exp(-beta))
@@ -348,6 +356,19 @@ function exact_energy(beta, L)
     -get_der_elip(beta)/get_elip(beta)
     # 1/sqrt(beta)
 end
+
+function elip_Z(beta::Float64; cutoff=5::Int64)
+    l_cutoff = Int64(ceil(abs(cutoff * sqrt(1/beta))))
+    l_rng_2 = (-l_cutoff:l_cutoff).^2
+    sum(exp.(.-beta.*l_rng_2))
+end
+
+function elip_energy(beta::Float64; cutoff=5::Int64)
+    l_cutoff = Int64(ceil(abs(cutoff * sqrt(1/beta))))
+    l_rng_2 = (-l_cutoff:l_cutoff).^2
+    sum(l_rng_2.*exp.(.-beta.*l_rng_2)) / sum(exp.(.-beta.*l_rng_2))
+end
+
 
 #%%
 # TODO: Need to implemet different coupling in the temporal and the Spatial Directions.
@@ -363,12 +384,12 @@ using Random
 function run_sim()
     gr()
     betas=range(0.1, length=10,stop=2)
-    betas=range(2.0, length=10,stop=4.0)
+    # betas=range(2.0, length=10,stop=4.0)
     # Ls=[5,10,20]
     # betas = [1]
     Ls=[20]
     num_measure=2^18
-    num_thermal=10000
+    num_thermal=100000
     fig_en=plot(title="energy")
     fig_heat_c=plot(title="heat capacity")
     fig_mag=plot(title="magnetization")
@@ -410,7 +431,7 @@ function run_sim()
         end
         plot!(fig_en, betas, ens, yerr=ens_std, xlabel=L"\beta",ylabel=L"E",label="mc L=$L",legend=:topright)
         # just in 1D:
-        plot!(fig_en,betas,[exact_energy(b,L) for b in betas],label="exact L=$L",legend=:topright)
+        plot!(fig_en,betas,elip_energy.(Float64.(betas)) ,label="exact L=$L",legend=:topright)
         # plot!(fig_en,betas,[exact_energy(b,L) for b in betas],label="exact L=$L",legend=:topleft)
 
         plot!(fig_heat_c,betas,L^SingleSpinFlip.NDIMS*heat_c,xlabel=L"\beta",ylabel=L"C_{V}",label="mc L=$L",legend=:topright)
