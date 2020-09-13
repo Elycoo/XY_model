@@ -24,7 +24,6 @@ function hop(index::CartesianIndex{NDIMS},dir::Int64,lr::Int64,dims::NTuple{NDIM
 end
 
 # Binning + (optionally) bootstrap analysis
-
 using Bootstrap
 function bin_bootstrap_analysis(data;min_sample_size=128,func_boot=nothing,n_boot=1000)
     # get total length
@@ -72,6 +71,8 @@ mutable struct SimData
     L::Int64
     # time dimension length
     M::Int64
+    # epsilon
+    eps::Float64
     # numbers of measurements
     num_measure::Int64
     # numbers of themalization steps
@@ -79,19 +80,15 @@ mutable struct SimData
 end
 
 # Measurements data
-
 mutable struct MeasureData
     # energy measurement time series
     energy::Array{Float64,1}
-    # magnetization
-    mag::Array{Float64,2}
 end
 function MeasureData(sim_data::SimData)
-    MeasureData(zeros(sim_data.num_measure),zeros(sim_data.num_measure,2))
+    MeasureData(zeros(sim_data.num_measure))
 end
 
 # Simulation data structure
-
 mutable struct IsingData
     # simulation data
     sim_data::SimData
@@ -115,7 +112,7 @@ end
 function IsingData(sim_data::SimData)
     IsingData(
         sim_data,
-        1.0 * ones(ntuple(k->sim_data.L,NDIMS )),
+        1.0 * ones(ntuple(n -> n < NDIMS ? sim_data.L : sim_data.M ,NDIMS )),
         0,
         # initial energy (-1)*Nz/2 if triangular lattice z is more then 2*NDIMS
         MeasureData(sim_data),
@@ -129,6 +126,21 @@ function mod2pi_(x)
     x = mod(x,2*pi)
     x > pi ? x-2*pi : x
 end
+
+# x = rand(10).*2pi.-pi
+# y = rand(10).*2pi.-pi
+# scatter(x,1:10,label="",color=:red);
+# scatter!(y,1:10,label="",color=:red);
+# scatter!([SingleSpinFlip.mean_mod2pi(x[i],y[i]) for i in 1:10],1:10,label="")
+# check function ↓ with ↑
+function mean_mod2pi(x::Float64, y::Float64)
+    if abs(x-y) < pi
+        return (x+y)/2
+    else
+        return mod2pi_((x+2*pi+y)/2)
+    end
+end
+
 
 #  Single step
 function next_step!(ising_data::IsingData)
@@ -151,42 +163,63 @@ function next_step!(ising_data::IsingData)
     end
 end
 function change_angle!(ising_data::IsingData)
-    β=ising_data.sim_data.β
-    ising_lat=ising_data.ising_lat
-    eps_ = 1/ising_data.sim_data.M
+    # TODO -- Change the worm position distributio nto a regular gaussian
+    ising_lat = ising_data.ising_lat
+    eps_ = ising_data.sim_data.eps
 
     # flip site
     flip_site=rand(CartesianIndices(ising_lat))
-    flip_site_nn = []
-    push!(flip_site_nn, hop(flip_site,NDIMS,1,size(ising_lat)) )
-    push!(flip_site_nn, hop(flip_site,NDIMS,2,size(ising_lat)) )
+    flip_site_up = hop(flip_site,NDIMS,1,size(ising_lat))
+    flip_site_down = hop(flip_site,NDIMS,1,size(ising_lat))
 
-    mean_ = (ising_lat[flip_site_nn[1]] + ising_lat[flip_site_nn[1]])/2
+    if !ising_data.is_closed && flip_site == ising_data.pos_worm
+        # if worm is open and we draw that position
+        if rand(1:2) == 1
+            # choosing the lattice angle
+            mean_ = ising_lat[flip_site_down]
+            sig = sqrt(eps_/2)
+            d = Normal(mean_, sig) # TODO: here
+            θ = rand(d)
+            ising_lat[flip_site] = mod2pi_(θ)
+            return true
+        else
+            # choosing the worm angle
+            mean_ = ising_lat[flip_site_up]
+            sig = sqrt(eps_/2)
+            d = Normal(mean_, sig) # TODO: here
+            θ = rand(d)
+            ising_data.θ_worm = mod2pi_(θ)
+            return true
+        end
+    elseif !ising_data.is_closed && flip_site_down == ising_data.pos_worm
+        # if worm is open and we just above the worm
+        mean_ = mean_mod2pi(ising_lat[flip_site_up],
+                            ising_data.θ_worm)
+        d = Normal(mean_, sqrt(eps_/4)) # TODO: here
+        θ = rand(d)
+        ising_lat[flip_site] = mod2pi_(θ)
+        return true
+    end
+    mean_ = mean_mod2pi(ising_lat[flip_site_up],
+                        ising_lat[flip_site_down]) # TODO - periodic boundary conditions! done!
     d = Normal(mean_, sqrt(eps_/4)) # TODO: here
     θ = rand(d)
-
     # always accept!
     # flip
     ising_lat[flip_site] = mod2pi_(θ)
-    true
+    return true
 end
 #%
 function open_worm!(ising_data::IsingData)
-    β = ising_data.sim_data.β
     ising_lat = ising_data.ising_lat
-    eps_ = 1/ising_data.sim_data.M
+    eps_ = ising_data.sim_data.eps
 
     # suggest to open
     pos = rand(CartesianIndices(ising_lat))
-    # TODO: maybe should draw direction to move?
-    # NO - because it does not make sense to make another drawing - it just to darwing another position
     npos = hop(pos,NDIMS,1,size(ising_lat))
 
-    # does not depend on the suggested θ_worm
-    # TODO: in notes is without the minus - but that cant be true
-    #       maybe it make sense for u<0
-
     # accept
+    # can add C multiplication
     A = min(1, exp(((ising_lat[npos]-ising_lat[pos])^2)/eps_))
 
     if A > rand()
@@ -196,7 +229,6 @@ function open_worm!(ising_data::IsingData)
         ising_data.is_closed = false
         ising_data.pos_worm = pos
         ising_data.θ_worm = mod2pi_(θ_worm)
-
         true
     else
         false
@@ -204,13 +236,12 @@ function open_worm!(ising_data::IsingData)
 end
 function close_worm!(ising_data::IsingData)
     # suggest to close
-    β = ising_data.sim_data.β
     ising_lat = ising_data.ising_lat
-    eps_ = 1/ising_data.sim_data.M
+    eps_ = ising_data.sim_data.eps
 
     pos = ising_data.pos_worm
     npos = hop(pos,NDIMS,1,size(ising_lat))
-    # accept?
+    # accept
     A = min(1, exp(-(ising_lat[npos]-ising_lat[pos])^2/eps_))
     if A > rand()
         ising_data.is_closed = true
@@ -220,15 +251,13 @@ function close_worm!(ising_data::IsingData)
 end
 
 function shift_worm!(ising_data::IsingData)
-    β = ising_data.sim_data.β
     ising_lat = ising_data.ising_lat
-    eps_ = 1/ising_data.sim_data.M
+    eps_ = ising_data.sim_data.eps
     pos = ising_data.pos_worm
 
     up_or_down = rand(1:2)
     npos = hop(pos,NDIMS,up_or_down,size(ising_lat))
 
-    # TODO: check about the mean in the distributions does it depend on the up\down move?
     # always accept!
     if up_or_down == 1
         # up
@@ -253,17 +282,12 @@ end
 # Make a measurement
 function make_measurement!(ising_data::IsingData, i::Int64)
     lat_size=length(ising_data.ising_lat)
-    # average magnetization
-    # magnetization vector squre
-    # mag_squre = sum(cos.(ising_data.ising_lat))^2 + sum(sin.(ising_data.ising_lat))^2
-    # ising_data.measure_data.mag[i,1]=mag_squre/lat_size^2
     # energy density
-    # TODO: maybe here
+    # TODO: maybe here /lat_size
     ising_data.measure_data.energy[i]=ising_data.total_energy/lat_size
 end
 
 # MCMC run
-
 function run_mcmc(sim_data::SimData)
     ising_data=IsingData(sim_data)
     lat_size=length(ising_data.ising_lat)
@@ -289,7 +313,7 @@ function run_mcmc(sim_data::SimData)
         end
     end
     println(count/sim_data.num_measure)
-    # ising_data.ising_lat = mod2p_.(ising_dat`a.ising_lat)
+    # ising_data.ising_lat = mod2p_.(ising_data.ising_lat)
     ising_data
 end
 
@@ -297,12 +321,13 @@ time_direction_energy(θ1::Float64,θ2::Float64,eps_::Float64) = mod2pi_(θ1 - �
 function calculate_energy!(ising_data::IsingData)
     e = 0.0
     ising_lat = ising_data.ising_lat
-    eps_ = ising_data.sim_data.β / ising_data.sim_data.M
-    for i in 1:ising_data.sim_data.M
-        j = i != 1 ? i - 1 : ising_data.sim_data.M
-        e += time_direction_energy(ising_lat[i],ising_lat[j], eps_)
+    eps_ = ising_data.sim_data.eps
+    M = ising_data.sim_data.M
+    for i in 1:M
+        j = i != 1 ? i - 1 : M
+        e += time_direction_energy(ising_lat[i],ising_lat[j], 1.0)
     end
-    ising_data.total_energy = e * eps_
+    ising_data.total_energy = (e * M)/(ising_data.sim_data.β^2)
 end
 
 using Plots
@@ -310,10 +335,11 @@ using Plots
 function visualize(ising_data::IsingData)
     # SimData
     lat = ising_data.ising_lat
+    M = ising_data.sim_data.M
     L = ising_data.sim_data.L
     if NDIMS  == 2
         grid = vcat([ [ind[1] ind[2]] for ind in CartesianIndices(lat)[:]]...)
-        plot(xticks=1:L, yticks=1:L, gridopacity=0.7)
+        plot(xticks=1:L, yticks=1:M, gridopacity=0.7)
         quiver!(grid[:, 1],grid[:, 2],
                 quiver=(cos.(lat[:]), sin.(lat[:])) ./ 2,
                 arrow= arrow(:closed,:head))
@@ -322,15 +348,15 @@ function visualize(ising_data::IsingData)
     end
     if NDIMS == 1 && TDIMS == 1
         if ising_data.is_closed
-            plot(lat,1:L,label=false)
-            scatter!(lat,1:L,label=false)
+            plot(lat,1:M,label=false)
+            scatter!(lat,1:M,label=false)
         else
             pos = ising_data.pos_worm
             theta = ising_data.θ_worm
-            rng = [1:pos[1], pos[1]:L, (pos[1]+1):L]
+            rng = [1:pos[1], pos[1]:M, (pos[1]+1):M]
             plot(lat[rng[1]], rng[1],label=false,line=:black)
             plot!([theta, lat[rng[3]]...], rng[2],label=false,line=:black)
-            scatter!(lat,1:L,label=false,marker=:blue,ma=0.5)
+            scatter!(lat,1:M,label=false,marker=:blue,ma=0.5)
             scatter!([ising_data.θ_worm] ,[pos[1]],label=false,marker=:red)
         end
         xlims!((-pi,pi))
@@ -342,36 +368,20 @@ end # visualize function
 end # SingleSpinFlip module
 
 #%%
-using SpecialFunctions: besseli
-# include("elip.jl")
-
-function exact_energy(beta, L)
-    # z = get_elip(exp(-beta))
-    # e = -∂_beta (log(z));
-
-    # e_β = exp(-beta)
-    # e_β*get_der_elip(e_β)/get_elip(e_β)
-
-    # -get_der_log_elip_exp(-beta)
-    -get_der_elip(beta)/get_elip(beta)
-    # 1/sqrt(beta)
-end
-
 function elip_Z(beta::Float64; cutoff=5::Int64)
-    l_cutoff = Int64(ceil(abs(cutoff * sqrt(1/beta))))
+    l_cutoff = ceil(Int64, abs(cutoff * sqrt(1/beta)))
     l_rng_2 = (-l_cutoff:l_cutoff).^2
     sum(exp.(.-beta.*l_rng_2))
 end
 
 function elip_energy(beta::Float64; cutoff=5::Int64)
-    l_cutoff = Int64(ceil(abs(cutoff * sqrt(1/beta))))
+    l_cutoff = ceil(Int64, abs(cutoff * sqrt(1/beta)))
     l_rng_2 = (-l_cutoff:l_cutoff).^2
     sum(l_rng_2.*exp.(.-beta.*l_rng_2)) / sum(exp.(.-beta.*l_rng_2))
 end
 
 
 #%%
-# TODO: Need to implemet different coupling in the temporal and the Spatial Directions.
 using Plots
 default(titlefontsize = 18,
         legendfontsize = 15,
@@ -383,28 +393,23 @@ using Random
 # Random.seed!(12463)
 function run_sim()
     gr()
-    betas=range(0.1, length=10,stop=2)
-    # betas=range(2.0, length=10,stop=4.0)
-    # Ls=[5,10,20]
-    # betas = [1]
-    Ls=[20]
+    betas=range(0.1, length=10,stop=2.0)
+    betas=range(1.0, length=10,stop=5.0)
+    factors=[10.0]
     num_measure=2^18
     num_thermal=100000
     fig_en=plot(title="energy")
-    fig_heat_c=plot(title="heat capacity")
-    fig_mag=plot(title="magnetization")
-    fig_tau=plot(title="correlation time")
-    for L in Ls
+    M = 0
+    L = 1
+    for factor in factors
         ens=Float64[]
         ens_std=Float64[]
-        heat_c=Float64[]
-        heat_c_std=Float64[]
-        mags=Float64[]
-        mags_std=Float64[]
-        taus=Float64[]
         for b in betas
-            sim_data=SingleSpinFlip.SimData(b, L, L, num_measure, num_thermal)
+            M=floor(Int64,b*factor)
+            eps_ = b/M
+            sim_data=SingleSpinFlip.SimData(b, L, M, eps_,num_measure, num_thermal)
             global res=SingleSpinFlip.run_mcmc(sim_data)    # start with all spins at the same direction
+            display(SingleSpinFlip.visualize(res))
             # global res=SingleSpinFlip.run_mcmc(sim_data,!start_cold)  # start with all spins  in random  direction
 
             # ENERGY
@@ -412,56 +417,31 @@ function run_sim()
             stds=SingleSpinFlip.bin_bootstrap_analysis(res.measure_data.energy)
             push!(ens_std,stds[end])
 
-            # HEAT CAPACITY
-            push!(heat_c, (mean(res.measure_data.energy.^2) - mean(res.measure_data.energy)^2)*b^2)
-
-            # MAGNETIZATION
-            mag = mean(res.measure_data.mag, dims=1)
-            # push!(mags, sqrt(mag[1]^2+mag[2]^2))
-
-            mag = mean(res.measure_data.mag[:,1])
-            push!(mags, mag)
-
-            stds=SingleSpinFlip.bin_bootstrap_analysis(res.measure_data.mag)
-            push!(mags_std,stds[end])
-
-            # CORRELATION TIME
-            tau=0.5*((stds[end]/stds[1])^2-1)
-            push!(taus,tau)
         end
-        plot!(fig_en, betas, ens, yerr=ens_std, xlabel=L"\beta",ylabel=L"E",label="mc L=$L",legend=:topright)
+        plot!(fig_en, betas, ens, yerr=ens_std, xlabel=L"\beta",ylabel=L"E",label="mc M=$M",legend=:topright)
         # just in 1D:
-        plot!(fig_en,betas,elip_energy.(Float64.(betas)) ,label="exact L=$L",legend=:topright)
-        # plot!(fig_en,betas,[exact_energy(b,L) for b in betas],label="exact L=$L",legend=:topleft)
-
-        plot!(fig_heat_c,betas,L^SingleSpinFlip.NDIMS*heat_c,xlabel=L"\beta",ylabel=L"C_{V}",label="mc L=$L",legend=:topright)
-
-        plot!(fig_mag,betas,mags,yerr =mags_std,xlabel=L"\beta",ylabel=L"m",label="L=$L",legend=:topleft)
-        # plot!(fig_mag,1 ./ betas,mags,yerr=mags_std,xlabel=L"k_{B}T/J",ylabel=L"m",label="L=$L",legend=:topleft)
-
-        plot!(fig_tau,betas,taus,label="L=$L",xlabel=L"\beta",ylabel=L"\tau",legend=:topleft)
+        plot!(fig_en,betas,elip_energy.(Float64.(betas)) ,label="exact M=$M",legend=:topright)
+        # plot!(fig_en,betas,[exact_energy(b,M) for b in betas],label="exact M=$M",legend=:topleft)
     end
-    fig=plot(fig_en,fig_heat_c,fig_mag,fig_tau,layout=(1,4),size = (1000, 1600))
-    fig=plot(fig_en,fig_heat_c,fig_mag,fig_tau,size = (800, 800))
     fig=plot(fig_en)
 end
-# fig=plot(fig_mag,size = (400, 600))
 display(run_sim())
 
 #%%
 num_measure=2^18
-num_thermal=10000
+num_thermal=100000
 
 function run_(num_measure,num_thermal)
-    b=1/100
-    b=10
-    L=20
-    sim_data=SingleSpinFlip.SimData(b,L,L,num_measure,num_thermal)
+    b=3.0
+    factor = 10.0
+    M=floor(Int64,b*factor)
+    eps_ = b/M
+    sim_data=SingleSpinFlip.SimData(b,1,M,eps_,num_measure,num_thermal)
     res=SingleSpinFlip.run_mcmc(sim_data)    # start with all spins at the same direction
     display(SingleSpinFlip.visualize(res))
     W = 0
-    for i in 1:L
-        j = i != 1 ? i - 1 : L
+    for i in 1:M
+        j = i != 1 ? i - 1 : M
         W = W + SingleSpinFlip.mod2pi_(res.ising_lat[i] - res.ising_lat[j])
     end
     W = round(W/2pi, digits=2)
@@ -469,10 +449,10 @@ function run_(num_measure,num_thermal)
     @show res.is_closed
     res
 end
-res = run_(num_measure,num_thermal)
+# res = run_(num_measure,num_thermal)
 #%%
 b=10
-L=20
-sim_data=SingleSpinFlip.SimData(b,L,L,num_measure,num_thermal)
+M=20
+sim_data=SingleSpinFlip.SimData(b,1,M,0.1,num_measure,num_thermal)
 r = SingleSpinFlip.IsingData(sim_data)
 SingleSpinFlip.MeasureData
